@@ -1,0 +1,6 @@
+{
+  "name": "License Server Admin",
+  "description": "A centralized license management and verification system for software distribution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
