@@ -17,11 +17,13 @@ import {
   Eye,
   Download,
   Upload,
-  X
+  X,
+  MessageSquare
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import PromptManagement from './components/PromptManagement';
 
 // --- Utils ---
 function cn(...inputs: ClassValue[]) {
@@ -257,6 +259,17 @@ export default function App() {
             <List className="w-5 h-5 mr-3" />
             授权列表
           </button>
+
+          <button
+            onClick={() => setActiveTab('prompts')}
+            className={cn(
+              "w-full flex items-center px-4 py-3 rounded-xl font-medium transition-all duration-200 text-left",
+              activeTab === 'prompts' ? "bg-blue-50 text-blue-700 shadow-sm" : "text-slate-500 hover:bg-slate-50 font-normal"
+            )}
+          >
+            <MessageSquare className="w-5 h-5 mr-3" />
+            提示词管理
+          </button>
         </nav>
 
         <div className="p-6 mt-auto">
@@ -279,11 +292,13 @@ export default function App() {
               {activeTab === 'dashboard' && '仪表盘概览'}
               {activeTab === 'generate' && '创建授权码'}
               {activeTab === 'list' && '授权档案库'}
+              {activeTab === 'prompts' && '提示词管理'}
             </h1>
             <p className="text-slate-400 text-sm">
               {activeTab === 'dashboard' && '实时监测授权分发与激活状态'}
               {activeTab === 'generate' && '配置并生成新的永久性授权密钥'}
               {activeTab === 'list' && '管理已签发的授权，进行吊销或解绑操作'}
+              {activeTab === 'prompts' && '查阅和管理用户提交的提示词与总结报告'}
             </p>
           </div>
 
@@ -730,6 +745,8 @@ export default function App() {
               </div>
             </div>
           )}
+
+          {activeTab === 'prompts' && <PromptManagement />}
         </div>
       </main>
 

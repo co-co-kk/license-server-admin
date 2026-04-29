@@ -1,0 +1,12 @@
+services:
+  license-server:
+    image: license-server-admin:latest
+    container_name: license-server-admin
+    ports:
+      - "20838:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+      - HMAC_SECRET=change-me-to-a-real-secret
+    restart: unless-stopped

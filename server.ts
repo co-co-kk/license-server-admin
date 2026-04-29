@@ -85,7 +85,8 @@ app.post('/api/v1/verify', rateLimit, (req, res) => {
       });
       consume();
 
-      const payload = { key, machine_fingerprint, type: 'permanent', issued_at: new Date().toISOString() };
+      const issuedAt = new Date().toISOString();
+      const payload = { key, machine_fingerprint, type: 'permanent', issued_at: issuedAt };
       return res.json({
         code: 0,
         message: 'ok',
@@ -93,6 +94,7 @@ app.post('/api/v1/verify', rateLimit, (req, res) => {
           action: 'consumed',
           license_key: key,
           type: 'permanent',
+          issued_at: issuedAt,
           signature: sign(payload, HMAC_SECRET)
         }
       });
@@ -105,7 +107,8 @@ app.post('/api/v1/verify', rateLimit, (req, res) => {
         return res.status(403).json({ code: 4001, message: '该卡密已被其他设备绑定，无法重复使用' });
       }
 
-      const payload = { key, machine_fingerprint, type: 'permanent', issued_at: new Date().toISOString() };
+      const issuedAt = new Date().toISOString();
+      const payload = { key, machine_fingerprint, type: 'permanent', issued_at: issuedAt };
       return res.json({
         code: 0,
         message: 'ok',
@@ -113,6 +116,7 @@ app.post('/api/v1/verify', rateLimit, (req, res) => {
           action: 'verified',
           license_key: key,
           type: 'permanent',
+          issued_at: issuedAt,
           signature: sign(payload, HMAC_SECRET)
         }
       });
@@ -264,6 +268,145 @@ app.post('/api/admin/licenses/:id/unbind', (req, res) => {
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// --- Prompt Submission API (External) ---
+
+app.post('/api/v1/submit-prompt', rateLimit, (req, res) => {
+  const { prompt, report, machine_code, license_key, input_tokens, output_tokens } = req.body;
+
+  if (!report || !machine_code || !license_key) {
+    return res.status(400).json({ code: 4000, message: '缺少必填参数' });
+  }
+
+  // prompt 可为空，代表用户没有自定义提示词用的系统默认提示词
+  if (prompt !== undefined && prompt !== null && typeof prompt === 'string' && prompt.trim().length === 0) {
+    return res.status(400).json({ code: 4000, message: '提示词内容无效' });
+  }
+
+  if (typeof report !== 'string' || report.trim().length === 0) {
+    return res.status(400).json({ code: 4000, message: '报告内容无效' });
+  }
+
+  if (typeof machine_code !== 'string' || machine_code.trim().length === 0) {
+    return res.status(400).json({ code: 4000, message: '机器码无效' });
+  }
+
+  try {
+    const license = db.prepare('SELECT id FROM license_keys WHERE key = ?').get(license_key) as any;
+
+    if (!license) {
+      return res.status(404).json({ code: 4004, message: '卡密不存在' });
+    }
+
+    db.prepare(
+      'INSERT INTO prompt_records (license_key, machine_code, prompt_content, report_content, input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(license_key, machine_code, prompt || null, report, input_tokens || 0, output_tokens || 0);
+
+    return res.json({ code: 0, message: '提示词已收录' });
+  } catch (error) {
+    console.error('Submit prompt error:', error);
+    return res.status(500).json({ code: 5000, message: 'Internal Server Error' });
+  }
+});
+
+// --- Admin Prompt Management API ---
+
+app.get('/api/admin/prompts/stats', (req, res) => {
+  const stats = {
+    pending: db.prepare("SELECT COUNT(*) as count FROM prompt_records WHERE status = 'pending'").get() as any,
+    reviewed: db.prepare("SELECT COUNT(*) as count FROM prompt_records WHERE status = 'reviewed'").get() as any,
+    archived: db.prepare("SELECT COUNT(*) as count FROM prompt_records WHERE status = 'archived'").get() as any,
+    total: db.prepare('SELECT COUNT(*) as count FROM prompt_records').get() as any
+  };
+
+  res.json({
+    code: 0,
+    data: {
+      pending: stats.pending.count,
+      reviewed: stats.reviewed.count,
+      archived: stats.archived.count,
+      total: stats.total.count
+    }
+  });
+});
+
+app.get('/api/admin/prompts', (req, res) => {
+  const page = parseInt(req.query.page as string) || 1;
+  const pageSize = parseInt(req.query.pageSize as string) || 20;
+  const status = req.query.status as string;
+  const search = req.query.search as string;
+
+  let countQuery = 'SELECT COUNT(*) as count FROM prompt_records WHERE 1=1';
+  let query = 'SELECT * FROM prompt_records WHERE 1=1';
+  const params: any[] = [];
+  const countParams: any[] = [];
+
+  if (status && status !== 'all') {
+    const statusFilter = ' AND status = ?';
+    query += statusFilter;
+    countQuery += statusFilter;
+    params.push(status);
+    countParams.push(status);
+  }
+
+  if (search) {
+    const searchFilter = ' AND prompt_content LIKE ?';
+    query += searchFilter;
+    countQuery += searchFilter;
+    params.push(`%${search}%`);
+    countParams.push(`%${search}%`);
+  }
+
+  query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  params.push(pageSize, (page - 1) * pageSize);
+
+  const list = db.prepare(query).all(...params);
+  const total = (db.prepare(countQuery).get(...countParams) as any).count;
+
+  res.json({
+    code: 0,
+    data: {
+      total,
+      page,
+      pageSize,
+      list
+    }
+  });
+});
+
+app.get('/api/admin/prompts/:id', (req, res) => {
+  const record = db.prepare('SELECT * FROM prompt_records WHERE id = ?').get(req.params.id) as any;
+  if (!record) return res.status(404).json({ code: 4004, message: '记录不存在' });
+
+  res.json({ code: 0, data: record });
+});
+
+app.put('/api/admin/prompts/:id', (req, res) => {
+  const { status, admin_notes } = req.body;
+
+  const validStatuses = ['pending', 'reviewed', 'archived'];
+  if (status && !validStatuses.includes(status)) {
+    return res.status(400).json({ code: 4000, message: '无效的状态值' });
+  }
+
+  const record = db.prepare('SELECT id FROM prompt_records WHERE id = ?').get(req.params.id) as any;
+  if (!record) return res.status(404).json({ code: 4004, message: '记录不存在' });
+
+  db.prepare(
+    "UPDATE prompt_records SET status = COALESCE(?, status), admin_notes = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(status, admin_notes, req.params.id);
+
+  const updated = db.prepare('SELECT * FROM prompt_records WHERE id = ?').get(req.params.id);
+  res.json({ code: 0, data: updated, message: '已更新' });
+});
+
+app.delete('/api/admin/prompts/:id', (req, res) => {
+  const record = db.prepare('SELECT id FROM prompt_records WHERE id = ?').get(req.params.id) as any;
+  if (!record) return res.status(404).json({ code: 4004, message: '记录不存在' });
+
+  db.prepare('DELETE FROM prompt_records WHERE id = ?').run(req.params.id);
+  res.json({ code: 0, message: '已删除' });
 });
 
 // Serve static assets from the React build
